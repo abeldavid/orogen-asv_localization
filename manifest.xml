@@ -16,5 +16,6 @@
   <depend package="base/types" />
   <depend package="slam/pose_ekf" />
   <depend package="drivers/orogen/aggregator" />
+  <depend package="auv_avalon/uw_localization" />
   <tags>needs_opt</tags>
 </package>

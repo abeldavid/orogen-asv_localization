@@ -7,11 +7,21 @@ using namespace asv_localization;
 Task::Task(std::string const& name)
     : TaskBase(name)
 {
+  
+  base::Vector3d vec;
+  vec << 0.0, 0.0, 0.0;
+  _laser_translation.set(vec);
+  _laser_rotation_euler.set(vec);
 }
 
 Task::Task(std::string const& name, RTT::ExecutionEngine* engine)
     : TaskBase(name, engine)
 {
+  
+  base::Vector3d vec;
+  vec << 0.0, 0.0, 0.0;
+  _laser_translation.set(vec);
+  _laser_rotation_euler.set(vec);  
 }
 
 Task::~Task()
@@ -166,7 +176,6 @@ void Task::orientation_samplesCallback(const base::Time &ts, const ::base::sampl
   if(firstPositionRecieved){
     if(base::Time::now().toSeconds()	- lastGpsTime.toSeconds() < _gps_timeout.get()){    
       
-      base::samples::RigidBodyState rbs;
       rbs.position = ekf.getPosition();
       rbs.position[2] = 0.0;
       
@@ -240,6 +249,102 @@ void Task::velocity_samplesCallback(const:: base::Time &ts, const ::base::sample
 }  
 
 
+void Task::laser_samplesCallback(const base::Time &ts, const base::samples::LaserScan &laser_samples_sample){
+  
+  if(firstOrientationRecieved && firstPositionRecieved){
+  
+    double angle = laser_samples_sample.start_angle;
+    double res = laser_samples_sample.angular_resolution;
+    
+    for(std::vector<uint32_t>::const_iterator it = laser_samples_sample.ranges.begin(); it != laser_samples_sample.ranges.end(); it++){
+      
+      double dist = *it / 1000.0;
+      
+        if(dist > _laser_min_range && dist < _laser_max_range){
+        
+        base::Quaterniond rot =   rbs.orientation * laserRotation * Eigen::AngleAxisd( angle, Eigen::Vector3d::UnitZ() );
+        
+        double abs_yaw = base::getYaw(rot);
+        
+        double mod = std::fmod(abs_yaw, M_PI * 0.5);
+
+        if( mod < 0.1 || mod > (M_PI * 0.5) - 0.1 ){
+          
+          boost::tuple<uw_localization::Node*, double, Eigen::Vector3d> distance = 
+                        node_map->getNearestDistance("root.wall", rot * base::Vector3d(1.0, 0,0)  , ekf.getPosition());
+          
+          double sim_dist = distance.get<1>();
+        
+          if(distance.get<1>() == INFINITY)
+            continue;
+          
+          base::Vector3d meas_pos = distance.get<2>() - (rot * base::Vector3d(dist, 0.0, 0.0) );
+          meas_pos(2) = 0.0;
+          
+          if(ekf.positionObservation( meas_pos, base::Matrix3d::Identity() * _laser_variance.get()  , _gps_reject_threshold.get() )){
+            std::cout << "Rejected laserscan" << std::endl;
+          }
+          
+        }
+        
+     }
+      
+      
+      angle += laser_samples_sample.angular_resolution;
+      
+    }
+    
+  }
+  
+}
+
+void Task::thruster_samplesCallback(const base::Time &ts, const base::samples::Joints &thruster_samples_sample){
+  
+  if(!lastThrusterTime.isNull()){
+    
+    base::samples::Joints joint = thruster_samples_sample;
+    double size = joint.size();
+    
+    if(size < 6){
+      joint.elements.resize(6);
+      
+      for(; size < 6; size++){
+        joint.elements[size].raw = 0.0;
+      }
+      
+    }
+    
+    
+    double dt = ts.toSeconds() - lastThrusterTime.toSeconds();
+    
+    if(dt > 0.0 && dt < 2.0){
+      
+      base::Vector6d Xt;
+     
+      
+      Xt.block<3,1>(0,0) = lastVelocity;;
+      Xt.block<3,1>(3,0) = base::Vector3d(0.0, 0.0, 0.0);
+      base::Vector6d V = motion_model->transition(Xt, dt, joint);
+      lastVelocity = V.block<3,1>(0,0);
+      
+      if(base::samples::RigidBodyState::isValidValue(lastVelocity) ){
+      
+        ekf.velocityObservation(lastVelocity, base::Matrix3d::Identity() * _model_variance.get(), _velocity_reject_threshold.get());
+      
+      }else{
+        lastVelocity = base::Vector3d::Zero();
+      }
+      
+    }
+  
+  
+  }
+  
+  lastThrusterTime = ts;
+  
+}
+
+
 /// The following lines are template definitions for the various state machine
 // hooks defined by Orocos::RTT. See Task.hpp for more detailed
 // documentation about them.
@@ -269,6 +374,12 @@ bool Task::configureHook()
     imuRotation = base::Quaterniond(Eigen::AngleAxisd(_imu_rotation.get() , Eigen::Vector3d::UnitZ()) );
     
     gpsPositions = boost::circular_buffer<base::samples::RigidBodyState>(_velocity_estimation_count.get());
+    
+    laserRotation = base::Quaterniond( Eigen::AngleAxisd( _laser_rotation_euler.get()(0), Eigen::Vector3d::UnitX() )
+                                      * Eigen::AngleAxisd( _laser_rotation_euler.get()(1), Eigen::Vector3d::UnitY()  ) 
+                                      * Eigen::AngleAxisd( _laser_rotation_euler.get()(2), Eigen::Vector3d::UnitZ()  ) );
+                                      
+    laserTranslation = _laser_translation.get();    
     
     relativeGps = _relative_gps_position.get();
     count = 0.0;
@@ -309,7 +420,39 @@ bool Task::configureHook()
 	    boost::bind( &asv_localization::Task::imu_samplesCallback, this, _1, _2 ),
 	    buffer_size_factor * std::ceil( _max_delay.get() / _imu_period.get() ),
 	    base::Time::fromSeconds( _imu_period.get() ) );      
-    }      
+    }
+    
+    if(_laser_samples.connected()){
+      
+      laserID = strAligner.registerStream<base::samples::LaserScan>(
+            boost::bind( &asv_localization::Task::laser_samplesCallback, this, _1, _2 ),
+            buffer_size_factor * std::ceil( _max_delay.get() / _laser_period.get() ),
+            base::Time::fromSeconds( _laser_period.get() ) ); 
+      
+    }
+    
+    if(_thruster_samples.connected()){
+      
+      thrusterID = strAligner.registerStream<base::samples::Joints>(
+            boost::bind( &asv_localization::Task::thruster_samplesCallback, this, _1, _2 ),
+            buffer_size_factor * std::ceil( _max_delay.get() / _thruster_period.get() ),
+            base::Time::fromSeconds( _thruster_period.get() ) ); 
+      
+    }    
+    
+    
+     if(_yaml_file.value().empty()){
+       std::cout << "ERROR: No yaml-map given" << std::endl;       
+     }else{  
+      std::cout << "Setup NodeMap" << std::endl;
+      node_map = new uw_localization::NodeMap();
+      if(!node_map->fromYaml(_yaml_file.value())){
+        std::cerr << "ERROR: No map could be load " << _yaml_file.value().c_str() << std::endl;
+      }
+      
+     }
+    
+    initMotionModel();
     
     return true;
     
@@ -375,7 +518,25 @@ void Task::updateHook()
 	  strAligner.push( imuID, imu_sample.time, imu_sample );
 	  
       }
-    }   
+    }
+    
+    if(laserID != -1){
+      base::samples::LaserScan laser_sample;
+      while( _laser_samples.read(laser_sample) == RTT::NewData ){
+        
+        strAligner.push( laserID, laser_sample.time, laser_sample);
+        
+      }
+      
+    }
+    
+    if(thrusterID != -1){
+      base::samples::Joints joints_sample;
+      while(_thruster_samples.read(joints_sample) == RTT::NewData){
+        strAligner.push( thrusterID, joints_sample.time, joints_sample);
+        
+      }
+    }
     
     //Excecute stream-aligner steps
     while(strAligner.step());  
@@ -424,4 +585,71 @@ void Task::cleanupHook()
 
     
 }
+
+void Task::initMotionModel()
+{
+  
+  if(_thruster_samples.connected() ){
+    motion_model = new uw_localization::UwMotionModel();
+    
+    uw_localization::UwVehicleParameter param;
+    param.Length = 0.0;
+    param.Radius = 0.0;
+    param.Mass = _vehicle_mass.get();
+    
+    base::Vector6d thrust;
+    
+    for(int i = 0; i < 6; i++){
+      
+      if(i < _thruster_coef.get().size()){
+        thrust(i) = _thruster_coef.get()[i];
+      }
+      else{
+        thrust(i) = 0.0;
+      }
+      
+    }
+      
+      param.ThrusterCoefficient = thrust;
+      param.LinearThrusterCoefficient = base::Vector6d::Zero();
+      param.SquareThrusterCoefficient = base::Vector6d::Zero();
+      param.ThrusterVoltage = _thruster_voltage.get();
+      
+      param.floating = true;
+      
+      if(_damping_coefficients.get().size() >= 2){
+        
+        param.DampingX << 0.0, _damping_coefficients.get()[0];
+        param.DampingY << 0.0, _damping_coefficients.get()[1];
+      }
+      else{
+        param.DampingX << 0.0, 10;
+        param.DampingY << 0.0, 10;        
+        
+      }
+      param.DampingZ << 9999, 9999;
+      
+      Eigen::Matrix<double, 6, 3, Eigen::DontAlign> tcm = Eigen::Matrix<double, 6, 3, Eigen::DontAlign>::Zero();
+      
+      if(_tcm.get().size() == _number_of_thruster.get() * 2){
+        
+        for(int t = 0; t < 6; t++){
+          
+          if(t < _number_of_thruster.get()){
+            
+            tcm(t,0) = _tcm.get()[t];
+            tcm(t,1) = _tcm.get()[t + _number_of_thruster.get()];
+            
+          }
+          
+        }        
+        
+      }
+
+      param.TCM = tcm;  
+      lastVelocity = base::Vector3d::Zero();
+  } 
+  
+}
+
 

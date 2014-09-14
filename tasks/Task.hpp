@@ -6,6 +6,8 @@
 #include "asv_localization/TaskBase.hpp"
 #include "pose_ekf/KFD_PosVelAcc.hpp"
 #include "aggregator/StreamAligner.hpp"
+#include "uw_localization/maps/node_map.hpp"
+#include <uw_localization/model/uw_motion_model.hpp>
 #include <boost/circular_buffer.hpp>
 
 namespace asv_localization {
@@ -33,6 +35,10 @@ namespace asv_localization {
         void imu_samplesCallback(const base::Time &ts, const ::base::samples::IMUSensors &imu_samples_sample);
         void orientation_samplesCallback(const base::Time &ts, const ::base::samples::RigidBodyState &orientation_samples_sample);
 	 void velocity_samplesCallback(const base::Time &ts, const ::base::samples::RigidBodyState &velocity_samples_sample);
+        void laser_samplesCallback(const base::Time &ts, const base::samples::LaserScan &laser_samples_sample);
+        void thruster_samplesCallback(const base::Time &ts, const base::samples::Joints &thruster_samples_sample);
+        
+        void initMotionModel();
 
     public:
         /** TaskContext constructor for Task
@@ -118,9 +124,12 @@ namespace asv_localization {
 	bool firstOrientationRecieved; //True, when we recieved a orientation-sample
 	base::Time lastImuTime; //Timestamp, of the last recieved imu-sample. Used for calculating delta-time of acceleration
 	base::Time lastGpsTime; //Timestamo, of the last recieved gps_sample. Used for calculation delta-time of velocity
+	base::Time lastThrusterTime;
+        base::Vector3d lastVelocity;
 	
 	base::samples::RigidBodyState firstGpsSample; //Use first Gps-sample as origin
 	base::samples::RigidBodyState lastGpsSample; //Last gps-sample for velocity-interpolation
+	base::samples::RigidBodyState rbs; //Actual vehicle state
 	boost::circular_buffer<base::samples::RigidBodyState> gpsPositions; //Ringbuffer of the last gps-samples for velocity estimation
 	base::Orientation lastOrientation; 
 	int samplesCount; //Counter for gps_samples
@@ -133,8 +142,16 @@ namespace asv_localization {
 	int velocityID; //ID of the velocity-stream
 	int imuID; //ID ofthe imu-stream
 	int gpsID; //ID of the gps-stream
+	int laserID; //ID of the lasser-stream
+	int thrusterID;
 	
 	base::Quaterniond imuRotation;
+        
+        Eigen::AngleAxis<double> laserRotation;
+        Eigen::Vector3d laserTranslation;
+        
+        uw_localization::NodeMap *node_map;
+        uw_localization::UwMotionModel *motion_model;
 	
 	base::Vector3d actualVelocity;
 	base::Vector3d relativeGps;	

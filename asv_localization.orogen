@@ -3,6 +3,7 @@ name "asv_localization"
 import_types_from "base"
 using_library "pose_ekf"
 using_library "aggregator"
+using_library "uw_localization"
 import_types_from "aggregator"
 
 task_context "Task" do
@@ -23,6 +24,12 @@ task_context "Task" do
 	
     input_port("velocity_samples", "base/samples/RigidBodyState").
 	doc("Velocity samples for acceleration estimation. For test purpose only")
+	
+    input_port("laser_samples", "base/samples/LaserScan").
+      doc("Samples from the laserscanner, to detect walls")
+      
+    input_port("thruster_samples", "base/samples/Joints").
+      doc("Samples from the thruster, for velocity estimation")
      
     
     #-------------------------
@@ -60,6 +67,8 @@ task_context "Task" do
     property("imu_period", "double" , 0.1)
     property("ori_period", "double" , 0.1)
     property("vel_period", "double" , 0.1)
+    property("laser_period", "double", 0.01)
+    property("thruster_period", "double", 0.01)
     
     
     property("initial_gps_origin", "bool" , false).
@@ -82,6 +91,26 @@ task_context "Task" do
     property("gps_timeout", "double", 10.0)
     property("orientation_timeout", "double", 10.0)
     
+    property("yaml_file", "std/string").
+      doc("yaml file for initial wall-map. this is used for laser-localiziation")
+      
+    property("laser_variance", "double", 1.0)
+    property("laser_min_range", "double", 0.1)
+    property("laser_max_range", "double", 10.0)
+    property("laser_translation", "/base/Vector3d")
+    property("laser_rotation_euler", "/base::Vector3d")
+    
+    
+    property("number_of_thruster", "int", 4)
+    property("thruster_coef", "std/vector<double>").
+      doc("Thruster coefficients, vector must have the size of number_of_thruster")
+    property("thruster_voltage", "double", 24)
+    property("tcm", "std/vector<double>").
+      doc("Thruster coeffiecients in x and y, as a number_of_thruster x 2 matrix")
+    property("damping_coefficients", "std/vector<double>").
+      doc("damping coefficients in x and y, vector must have the size 2")
+    property("vehicle_mass", "double", 20)  
+    property("model_variance", "double", 0.2)
     
     #----------------------------
     # Stream Aligner
@@ -101,5 +130,7 @@ task_context "Task" do
     port_driven :imu_samples
     port_driven :orientation_samples
     port_driven :velocity_samples
+    port_driven :laser_samples
+    port_driven :thruster_samples
 end
 
