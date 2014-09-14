@@ -34,9 +34,18 @@ void Task::gps_samplesCallback(const base::Time &ts, const ::base::samples::Rigi
   
   base::Vector3d pos;
   
+  if(_enframe_to_nwframe.get()){
   //Convert EN-Frame to NW-Frame
-  pos[0] = gps_samples_sample.position[1];
-  pos[1] = -gps_samples_sample.position[0];
+    pos[0] = gps_samples_sample.position[1];
+    pos[1] = -gps_samples_sample.position[0];
+  }
+  else{
+   //Stay in the EN-Frame
+   pos[0] = gps_samples_sample.position[0];
+   pos[1] = gps_samples_sample.position[1];
+    
+  }
+  
   pos[2] = 0.0; //We asume, that we are only on the surface
   
   pos = pos - (ekf.getRotation().inverse() * relativeGps);
@@ -89,7 +98,7 @@ void Task::gps_samplesCallback(const base::Time &ts, const ::base::samples::Rigi
 	  if(ekf.velocityObservation(vel, covar, _velocity_reject_threshold.get()))
 	    std::cout << "Rejected Velocity" << std::endl;	    
 
-      } 
+        } 
       }
       
     }    
@@ -251,7 +260,10 @@ void Task::velocity_samplesCallback(const:: base::Time &ts, const ::base::sample
 
 void Task::laser_samplesCallback(const base::Time &ts, const base::samples::LaserScan &laser_samples_sample){
   
-  if(firstOrientationRecieved && firstPositionRecieved){
+  if(!node_map->belongsToWorld(ekf.getPosition() ) )
+    std::cout << "Belongs not to world" << std::endl;
+  
+  if(firstOrientationRecieved && firstPositionRecieved && node_map != 0 && node_map->belongsToWorld(ekf.getPosition() )  ){
   
     double angle = laser_samples_sample.start_angle;
     double res = laser_samples_sample.angular_resolution;
@@ -259,6 +271,10 @@ void Task::laser_samplesCallback(const base::Time &ts, const base::samples::Lase
     for(std::vector<uint32_t>::const_iterator it = laser_samples_sample.ranges.begin(); it != laser_samples_sample.ranges.end(); it++){
       
       double dist = *it / 1000.0;
+      /*
+      std::cout << "#######################" << std::endl;
+      std::cout << "Dist: "  << dist << std::endl;
+      */
       
         if(dist > _laser_min_range && dist < _laser_max_range){
         
@@ -266,22 +282,52 @@ void Task::laser_samplesCallback(const base::Time &ts, const base::samples::Lase
         
         double abs_yaw = base::getYaw(rot);
         
+        while(abs_yaw < 0.0){
+          abs_yaw += M_PI;          
+        }
+        
         double mod = std::fmod(abs_yaw, M_PI * 0.5);
-
+        
+        //std::cout << "Angle: " << angle <<  " Abs yaw: " << abs_yaw << " mod: " << mod << std::endl; 
+        
+        //Only use scans in x or y-direction
         if( mod < 0.1 || mod > (M_PI * 0.5) - 0.1 ){
           
           boost::tuple<uw_localization::Node*, double, Eigen::Vector3d> distance = 
-                        node_map->getNearestDistance("root.wall", rot * base::Vector3d(1.0, 0,0)  , ekf.getPosition());
+                        node_map->getNearestDistance("root.wall", ekf.getPosition() + (rot * base::Vector3d(dist, 0,0))  , ekf.getPosition());
           
           double sim_dist = distance.get<1>();
         
           if(distance.get<1>() == INFINITY)
             continue;
           
+          base::Matrix3d covar_mes = base::Matrix3d::Identity();
+          
+          mod = std::fmod(abs_yaw, M_PI);
+          
+          //Scan is in x-direction
+          if(mod < 0.1 || mod > M_PI - 0.1){
+            covar_mes(0,0) = _laser_variance.get();
+            covar_mes(1,1) = std::numeric_limits<int>::max();
+            covar_mes(2,2) = std::numeric_limits<int>::max();
+          }
+          else{ //Scan is in y-direction
+            covar_mes(0,0) = std::numeric_limits<int>::max();
+            covar_mes(1,1) = _laser_variance.get();
+            covar_mes(2,2) = std::numeric_limits<int>::max();
+          }
+          
+          
           base::Vector3d meas_pos = distance.get<2>() - (rot * base::Vector3d(dist, 0.0, 0.0) );
           meas_pos(2) = 0.0;
           
-          if(ekf.positionObservation( meas_pos, base::Matrix3d::Identity() * _laser_variance.get()  , _gps_reject_threshold.get() )){
+          /*
+          std::cout << "Observation, dist: " << dist << " sim_dist: " << sim_dist << std::endl;
+          std::cout << "Pos: " << ekf.getPosition().transpose() << " mesPos: " << meas_pos.transpose() << std::endl;
+          std::cout << "Cov-matrix: " << covar_mes << std::endl;
+          */
+          
+          if(ekf.positionObservation( meas_pos, covar_mes  , _gps_reject_threshold.get() )){
             std::cout << "Rejected laserscan" << std::endl;
           }
           
@@ -441,16 +487,7 @@ bool Task::configureHook()
     }    
     
     
-     if(_yaml_file.value().empty()){
-       std::cout << "ERROR: No yaml-map given" << std::endl;       
-     }else{  
-      std::cout << "Setup NodeMap" << std::endl;
-      node_map = new uw_localization::NodeMap();
-      if(!node_map->fromYaml(_yaml_file.value())){
-        std::cerr << "ERROR: No map could be load " << _yaml_file.value().c_str() << std::endl;
-      }
-      
-     }
+
     
     initMotionModel();
     
@@ -469,6 +506,19 @@ bool Task::startHook()
 
     //ekf = pose_ekf::KFD_PosVelAcc();
     lastGpsTime = base::Time::now();
+    
+     if(_yaml_file.value().empty()){
+       std::cout << "ERROR: No yaml-map given" << std::endl;
+       node_map = 0;
+     }else{  
+      std::cout << "Setup NodeMap" << std::endl;
+      node_map = new uw_localization::NodeMap();
+      if(!node_map->fromYaml(_yaml_file.value())){
+        std::cerr << "ERROR: No map could be load " << _yaml_file.value().c_str() << std::endl;
+      }
+      
+     }    
+    
     
     return true;
     
@@ -544,6 +594,12 @@ void Task::updateHook()
     
     //std::cout << "Update" << std::endl;
     _stream_aligner_status.write(strAligner.getStatus());
+    
+    if(lastEnvWrite.isNull() || base::Time::now().toSeconds() - lastEnvWrite.toSeconds() > 2.0){
+      
+      _environment.write(node_map->getEnvironment());
+      lastEnvWrite = base::Time::now();
+    }
         
 }
 
@@ -567,7 +623,7 @@ void Task::stopHook()
     
     RTT::TaskContext::stopHook();
     
-
+    delete node_map;
     
 
     

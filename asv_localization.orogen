@@ -5,6 +5,7 @@ using_library "pose_ekf"
 using_library "aggregator"
 using_library "uw_localization"
 import_types_from "aggregator"
+import_types_from "uw_localization/types/environment.hpp"
 
 task_context "Task" do
   
@@ -41,6 +42,9 @@ task_context "Task" do
       
     output_port("stream_aligner_status", "aggregator/StreamAlignerStatus").
       doc("Actual status of the stream alligner")
+      
+    output_port("environment", "/uw_localization/Environment").
+        doc("current map environment")      
     
     #------------------------
     # Properties
@@ -87,6 +91,9 @@ task_context "Task" do
       
     property("relative_gps_position", "base/Vector3d").
       doc("Position of the gps in the body frame")
+      
+    property("enframe_to_nwframe", "bool", true).
+      doc("Convert gps from East-North-Frame to North-West-Frame")
 	
     property("gps_timeout", "double", 10.0)
     property("orientation_timeout", "double", 10.0)

@@ -125,6 +125,7 @@ namespace asv_localization {
 	base::Time lastImuTime; //Timestamp, of the last recieved imu-sample. Used for calculating delta-time of acceleration
 	base::Time lastGpsTime; //Timestamo, of the last recieved gps_sample. Used for calculation delta-time of velocity
 	base::Time lastThrusterTime;
+        base::Time lastEnvWrite;
         base::Vector3d lastVelocity;
 	
 	base::samples::RigidBodyState firstGpsSample; //Use first Gps-sample as origin
