@@ -139,5 +139,8 @@ task_context "Task" do
     port_driven :velocity_samples
     port_driven :laser_samples
     port_driven :thruster_samples
+    
+    runtime_states "LOCALIZING", "NO_ORIENTATION", "GPS_TIMEOUT", "POSITION_INVALID"
+    
 end
 

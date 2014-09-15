@@ -101,7 +101,13 @@ void Task::gps_samplesCallback(const base::Time &ts, const ::base::samples::Rigi
         } 
       }
       
-    }    
+    }else{
+      
+      if(state() != NO_ORIENTATION){
+        state(NO_ORIENTATION);
+      }
+      
+    }
     
   }else{ //First gps-sample
     
@@ -183,7 +189,7 @@ void Task::orientation_samplesCallback(const base::Time &ts, const ::base::sampl
   
   //Write out actual state  
   if(firstPositionRecieved){
-    if(base::Time::now().toSeconds()	- lastGpsTime.toSeconds() < _gps_timeout.get()){    
+    if(ts.toSeconds()	- lastGpsTime.toSeconds() < _gps_timeout.get()){    
       
       rbs.position = ekf.getPosition();
       rbs.position[2] = 0.0;
@@ -207,8 +213,19 @@ void Task::orientation_samplesCallback(const base::Time &ts, const ::base::sampl
       rbs.cov_position = ekf.getPositionCovariance();
       rbs.cov_velocity = ekf.getVelocityCovariance();
       _pose_samples.write(rbs);
+      
+      if(state() != LOCALIZING){
+        state(LOCALIZING);
+      }
+      
+      
     }else{
       std::cerr << "GPS-Timeout" << std::endl;
+      
+      if(state() != GPS_TIMEOUT){
+        state(GPS_TIMEOUT);
+      }
+        
     }  
     
   }  
